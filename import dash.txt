@@ -1,0 +1,112 @@
+import dash
+from dash import dcc # dash core components
+from dash import html # dash html components
+from dash.dependencies import Input, Output
+import plotly.graph_objs as go
+import pandas as pd
+import yfinance as yf
+from datetime import datetime, timedelta
+
+# --- Configuration ---
+STOCK_TICKER = 'AAPL'  # Change this to the stock ticker you want to track (e.g., 'GOOGL', 'MSFT')
+UPDATE_INTERVAL_MS = 60 * 1000 # Update every 60 seconds (in milliseconds)
+TIME_WINDOW = '1d' # Fetch data for the last 1 day
+DATA_INTERVAL = '1m' # Fetch data with 1-minute granularity
+
+# --- Helper Function to Fetch Data ---
+def fetch_stock_data(ticker, period='1d', interval='1m'):
+    """
+    Fetches historical stock data for the given ticker using yfinance.
+    """
+    stock = yf.Ticker(ticker)
+    try:
+        # Fetch data for the specified period and interval
+        data = stock.history(period=period, interval=interval)
+
+        if data.empty:
+            print(f"Warning: No data returned for {ticker} with period={period}, interval={interval}. Market might be closed or ticker invalid.")
+            return pd.DataFrame() # Return empty DataFrame
+
+        # Ensure the index is datetime
+        data.index = pd.to_datetime(data.index)
+
+        # Optional: Filter for regular market hours if using minute data
+        # data = data.between_time('09:30', '16:00')
+
+        return data
+
+    except Exception as e:
+        print(f"Error fetching data for {ticker}: {e}")
+        return pd.DataFrame() # Return empty DataFrame on error
+
+# --- Initialize the Dash App ---
+external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
+# CORRECTED LINE: Use __name__ (double underscores)
+app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
+app.title = f"{STOCK_TICKER} Real-time Dashboard"
+
+# --- Define the App Layout ---
+app.layout = html.Div([
+    html.H1(f"Real-time Stock Price Dashboard: {STOCK_TICKER}", style={'textAlign': 'center'}),
+    html.Div(id='live-update-text', style={'textAlign': 'center', 'fontSize': 18}),
+    dcc.Graph(id='live-stock-graph'),
+    dcc.Interval(
+        id='interval-component',
+        interval=UPDATE_INTERVAL_MS,
+        n_intervals=0
+    )
+])
+
+# --- Define Callbacks for Interactivity ---
+@app.callback(
+    [Output('live-stock-graph', 'figure'),
+     Output('live-update-text', 'children')],
+    [Input('interval-component', 'n_intervals')]
+)
+def update_graph_live(n):
+    """
+    This function is triggered by the Interval component.
+    It fetches new data and updates the graph and text.
+    """
+    data = fetch_stock_data(STOCK_TICKER, period=TIME_WINDOW, interval=DATA_INTERVAL)
+
+    if data.empty:
+        last_update_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        update_text = f"No recent data found for {STOCK_TICKER}. Market might be closed. Last check: {last_update_time}"
+        fig = go.Figure()
+        fig.update_layout(
+            title=f'{STOCK_TICKER} Price Chart (Data unavailable)',
+            xaxis_title='Time',
+            yaxis_title='Price (USD)',
+            xaxis_rangeslider_visible=False,
+            annotations=[dict(text="No data to display", showarrow=False, xref="paper", yref="paper", x=0.5, y=0.5)]
+        )
+        return fig, update_text
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data['Close'],
+        mode='lines',
+        name='Close Price',
+        line=dict(color='royalblue', width=2)
+    ))
+    fig.update_traces(hoverinfo='x+y',
+                      hovertemplate='<b>Time</b>: %{x|%Y-%m-%d %H:%M:%S}<br><b>Price</b>: $%{y:.2f}<extra></extra>')
+
+    latest_time = data.index[-1].strftime('%Y-%m-%d %H:%M:%S')
+    latest_price = data['Close'].iloc[-1]
+    update_text = f"Last updated: {latest_time} | Latest Price: ${latest_price:.2f}"
+
+    fig.update_layout(
+        title=f'{STOCK_TICKER} Price ({DATA_INTERVAL} interval)',
+        xaxis_title='Time',
+        yaxis_title='Price (USD)',
+        xaxis_rangeslider_visible=True,
+        template='plotly_white',
+        height=500,
+        margin=dict(l=40, r=40, t=80, b=40),
+        hovermode='x unified'
+    )
+
+    return fig, update_text
